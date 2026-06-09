@@ -1,0 +1,55 @@
+# Gradle / Kotlin
+.gradle/
+.kotlin/
+**/build/
+!src/**/build/
+
+# Local configuration
+local.properties
+*.iml
+
+# IDEs
+.idea/
+.vscode/
+
+# Android generated files
+.externalNativeBuild/
+.cxx/
+captures/
+
+# Apple / Xcode local state
+.DS_Store
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+# JavaScript tooling
+node_modules/
+
+# Agent and local automation artifacts
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+agents.md
+claude.md
+gemini.md
+.claude/
+.codex/
+.cursor/
+.continue/
+.aider*
+screenshots/
+recordings/
+*.mov
+*.mp4
+*.webm
+playwright-report/
+test-results/

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Post-splash app theme. White window background matches the splash and the
+         catalog base surface so the transition into the Compose UI shows no flash. -->
+    <style name="Theme.PizzaMA" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+
+    <!-- Launch theme: replaces the Android 12+ default icon splash with a plain
+         white window matching the pizza-assembly splash. The animated icon is
+         transparent so only the background shows until the first Compose frame. -->
+    <style name="Theme.PizzaMA.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@android:color/white</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
+        <item name="postSplashScreenTheme">@style/Theme.PizzaMA</item>
+    </style>
+</resources>
