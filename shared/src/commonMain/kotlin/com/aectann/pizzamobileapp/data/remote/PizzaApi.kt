@@ -15,6 +15,7 @@ class PizzaApi(
 ) {
     // Tolerate fields the client does not model so backend additions never crash parsing.
     private val configure: HttpClientConfig<*>.() -> Unit = {
+        expectSuccess = true
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }

@@ -1,8 +1,10 @@
 package com.aectann.pizzamobileapp.ui.catalog
 
 import com.aectann.pizzamobileapp.data.model.PizzaSize
+import com.aectann.pizzamobileapp.data.repository.PizzaLoadFailure
 import com.aectann.pizzamobileapp.testutil.FakePizzaRepository
 import com.aectann.pizzamobileapp.testutil.samplePizza
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -70,9 +72,37 @@ class PizzaCatalogViewModelTest {
 
         val state = viewModel.uiState.value
         assertFalse(state.isLoading)
-        assertNotNull(state.error)
-        assertEquals("boom", state.error)
+        assertEquals(PizzaLoadFailure.Unknown, state.error)
         assertTrue(state.pizzas.isEmpty())
+    }
+
+    @Test
+    fun initialLoadResultPopulatesPizzasWithoutSecondRepositoryCall() = runTest(dispatcher) {
+        val pizzas = listOf(samplePizza(id = "prefetched"))
+        val repository = FakePizzaRepository.succeeding(listOf(samplePizza(id = "from-repository")))
+        val initialLoad = CompletableDeferred(Result.success(pizzas))
+
+        val viewModel = PizzaCatalogViewModel(
+            initialLoad = initialLoad,
+            repository = repository,
+        )
+        advanceUntilIdle()
+
+        assertEquals(pizzas, viewModel.uiState.value.pizzas)
+        assertEquals(0, repository.callCount)
+    }
+
+    @Test
+    fun retryAfterErrorRunsRepositoryAgain() = runTest(dispatcher) {
+        val repository = FakePizzaRepository.failing(RuntimeException("boom"))
+        val viewModel = PizzaCatalogViewModel(repository = repository)
+        advanceUntilIdle()
+
+        viewModel.retry()
+        advanceUntilIdle()
+
+        assertEquals(2, repository.callCount)
+        assertEquals(PizzaLoadFailure.Unknown, viewModel.uiState.value.error)
     }
 
     @Test

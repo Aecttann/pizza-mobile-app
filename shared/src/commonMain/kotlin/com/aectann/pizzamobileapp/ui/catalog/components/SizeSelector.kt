@@ -45,7 +45,7 @@ private val SelectorWidth = 244.dp
 private val SelectorHeight = 64.dp
 private val PillTouchSize = 52.dp
 private val PillCircleSize = 48.dp
-private val SidePillVerticalOffset = (-8).dp
+private val SidePillVerticalOffset = (-16).dp
 
 @Composable
 fun SizeSelector(

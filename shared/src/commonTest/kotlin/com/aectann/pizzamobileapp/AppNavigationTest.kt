@@ -1,6 +1,5 @@
 package com.aectann.pizzamobileapp
 
-import com.aectann.pizzamobileapp.testutil.samplePizza
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -8,70 +7,50 @@ import kotlin.test.assertNull
 class AppNavigationTest {
 
     @Test
-    fun staysOnSplashUntilAnimationFinishesEvenWhenDataReady() {
+    fun staysOnSplashUntilAnimationFinishes() {
         val destination = resolveDestination(
             animationDone = false,
-            pizzas = listOf(samplePizza()),
-            loadingFailed = false,
+            networkGate = SplashNetworkGate.Released,
         )
 
         assertNull(destination)
     }
 
     @Test
-    fun staysOnSplashUntilAnimationFinishesEvenWhenLoadFailed() {
+    fun opensCatalogWhenAnimationDoneAndInitialRequestStillLoading() {
         val destination = resolveDestination(
-            animationDone = false,
-            pizzas = null,
-            loadingFailed = true,
+            animationDone = true,
+            networkGate = SplashNetworkGate.InitialRequest,
+        )
+
+        assertEquals(Destination.Catalog, destination)
+    }
+
+    @Test
+    fun opensCatalogWhenAnimationDoneAndRequestReleased() {
+        val destination = resolveDestination(
+            animationDone = true,
+            networkGate = SplashNetworkGate.Released,
+        )
+
+        assertEquals(Destination.Catalog, destination)
+    }
+
+    @Test
+    fun staysOnSplashWhenOfflineBlocked() {
+        val destination = resolveDestination(
+            animationDone = true,
+            networkGate = SplashNetworkGate.OfflineBlocked,
         )
 
         assertNull(destination)
     }
 
     @Test
-    fun opensCatalogWhenAnimationDoneAndDataReady() {
-        val pizzas = listOf(samplePizza(id = "a"), samplePizza(id = "b"))
-
+    fun staysOnSplashWhileOfflineRetryIsRunning() {
         val destination = resolveDestination(
             animationDone = true,
-            pizzas = pizzas,
-            loadingFailed = false,
-        )
-
-        assertEquals(Destination.Catalog(pizzas), destination)
-    }
-
-    @Test
-    fun opensErrorWhenAnimationDoneAndLoadFailed() {
-        val destination = resolveDestination(
-            animationDone = true,
-            pizzas = null,
-            loadingFailed = true,
-        )
-
-        assertEquals(Destination.LoadError, destination)
-    }
-
-    @Test
-    fun successTakesPrecedenceOverFailure() {
-        val pizzas = listOf(samplePizza())
-
-        val destination = resolveDestination(
-            animationDone = true,
-            pizzas = pizzas,
-            loadingFailed = true,
-        )
-
-        assertEquals(Destination.Catalog(pizzas), destination)
-    }
-
-    @Test
-    fun waitsWhenAnimationDoneButNoOutcomeYet() {
-        val destination = resolveDestination(
-            animationDone = true,
-            pizzas = null,
-            loadingFailed = false,
+            networkGate = SplashNetworkGate.RetryRequest,
         )
 
         assertNull(destination)

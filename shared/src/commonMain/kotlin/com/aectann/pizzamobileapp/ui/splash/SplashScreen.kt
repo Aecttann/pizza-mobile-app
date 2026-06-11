@@ -32,8 +32,8 @@ import pizzamobileapp.shared.generated.resources.Res
 import pizzamobileapp.shared.generated.resources.splash_pizza
 
 private const val SLICE_COUNT = 8
-private const val SLICE_STAGGER_MS = 32L
-private const val SLICE_ANIM_MS = 25
+private const val SLICE_STAGGER_MS = 24L
+private const val SLICE_ANIM_MS = 18
 private val PIZZA_SIZE = 270.dp
 private const val SLICE_INITIAL_SCALE = 0.96f
 

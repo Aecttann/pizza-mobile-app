@@ -2,6 +2,8 @@ package com.aectann.pizzamobileapp.ui.catalog
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -36,11 +38,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -72,6 +77,7 @@ import coil3.request.crossfade
 import coil3.size.Size
 import com.aectann.pizzamobileapp.data.model.Pizza
 import com.aectann.pizzamobileapp.data.model.PizzaSize
+import com.aectann.pizzamobileapp.data.repository.PizzaLoadFailure
 import com.aectann.pizzamobileapp.ui.catalog.components.BananaForScale
 import com.aectann.pizzamobileapp.ui.catalog.components.OrderBar
 import com.aectann.pizzamobileapp.ui.catalog.components.PizzaNavbar
@@ -82,8 +88,10 @@ import com.aectann.pizzamobileapp.ui.theme.ColorAccent
 import com.aectann.pizzamobileapp.ui.theme.ColorHighlight
 import com.aectann.pizzamobileapp.ui.theme.ColorText
 import com.aectann.pizzamobileapp.ui.theme.ColorWhite
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 
@@ -99,9 +107,18 @@ private val ZOOM_ICON_SIZE = 88.dp
 private val CAROUSEL_HEIGHT = 330.dp
 
 private const val MAX_ZOOM = 5.2f
-private const val ZOOM_PAN_MULTIPLIER = 2.5f
-private const val PINCH_ZOOM_OUT_THRESHOLD = 1.08f
-private const val ZOOM_ANIMATION_DURATION_MS = 950
+private const val ZOOM_PAN_MULTIPLIER = 3.4f
+private const val PINCH_ZOOM_GESTURE_THRESHOLD = 0.015f
+private const val ZOOM_ANIMATION_DURATION_MS = 475
+private const val ZOOM_IN_OVERSHOOT = 1.018f
+private const val ZOOM_OUT_UNDERSHOOT = 0.94f
+private const val SIZE_BOUNCE_DURATION_MS = 220
+private const val SIZE_L_TO_M_SHRINK_DURATION_MS = 260
+private const val PAGE_SETTLE_PULL_DURATION_MS = 315
+private const val PAGE_SETTLE_PULL_CLICK_OFFSET_THRESHOLD = 0.04f
+private const val INFO_PANEL_BOUNCE_DURATION_MS = 240
+private val PAGE_SETTLE_PULL_DISTANCE = 8.dp
+private val INFO_PANEL_BOUNCE_DISTANCE = 12.dp
 private const val INITIAL_PIZZA_ID = "pepperoni-blast"
 private const val CATALOG_BG_ENTER_DELAY_MS = 35L
 private const val CATALOG_BG_ENTER_MS = 120
@@ -113,13 +130,25 @@ private const val PIZZA_MEDIUM_PX = 700
 
 private const val BG_SEAM_EDGE = 0.566f
 private const val BG_SEAM_CENTER = 0.65f
-private val BG_CURVE_SIDE_VISUAL_LIFT = 8.dp
+private val BG_CURVE_SIDE_VISUAL_LIFT = 0.dp
 private val INFO_PANEL_ZOOM_EXIT = 620.dp
 
 private fun PizzaSize.pizzaImageSize(): Dp = when (this) {
     PizzaSize.S -> PIZZA_SIZE_S
     PizzaSize.M -> PIZZA_SIZE_M
     PizzaSize.L -> PIZZA_SIZE_L
+}
+
+private enum class SizeChangeAnimation {
+    None,
+    SmoothShrink,
+    Bounce,
+}
+
+private fun sizeChangeAnimation(from: PizzaSize, to: PizzaSize): SizeChangeAnimation = when {
+    from == to -> SizeChangeAnimation.None
+    from == PizzaSize.L && to == PizzaSize.M -> SizeChangeAnimation.SmoothShrink
+    else -> SizeChangeAnimation.Bounce
 }
 
 // Two-tier loading for the same URL:
@@ -147,29 +176,26 @@ private fun pizzaImageRequest(context: PlatformContext, url: String, full: Boole
 @Composable
 fun PizzaCatalogScreen(
     initialPizzas: List<Pizza>? = null,
-    viewModel: PizzaCatalogViewModel = viewModel { PizzaCatalogViewModel(initialPizzas = initialPizzas) },
+    initialLoad: Deferred<Result<List<Pizza>>>? = null,
+    viewModel: PizzaCatalogViewModel = viewModel {
+        PizzaCatalogViewModel(
+            initialPizzas = initialPizzas,
+            initialLoad = initialLoad,
+        )
+    },
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     Box(modifier = Modifier.fillMaxSize().background(ColorWhite)) {
         when {
             state.isLoading -> {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .testTag(CatalogTestTags.LOADING),
-                    color = ColorAccent,
-                )
+                CatalogLoadingScreen()
             }
-            state.error != null -> {
-                Text(
-                    text = "Failed to load pizzas.\nPlease try again.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(24.dp)
-                        .testTag(CatalogTestTags.ERROR),
+            state.error != null -> state.error?.let { error ->
+                CatalogLoadError(
+                    error = error,
+                    onRetry = viewModel::retry,
+                    modifier = Modifier.align(Alignment.Center),
                 )
             }
             state.pizzas.isNotEmpty() -> {
@@ -181,6 +207,59 @@ fun PizzaCatalogScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun CatalogLoadingScreen() {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isLandscape = maxWidth > maxHeight
+        CatalogBackground(
+            progress = 1f,
+            isLandscape = isLandscape,
+            sizeSelectorCurveAnchors = null,
+            carouselRootLeft = 0f,
+            carouselRootTop = 0f,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        CircularProgressIndicator(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .testTag(CatalogTestTags.LOADING),
+            color = ColorAccent,
+        )
+    }
+}
+
+@Composable
+private fun CatalogLoadError(
+    error: PizzaLoadFailure,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .padding(24.dp)
+            .testTag(CatalogTestTags.ERROR),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = when (error) {
+                PizzaLoadFailure.NetworkUnavailable -> "No internet connection.\nCheck your connection and try again."
+                PizzaLoadFailure.Server -> "Server error.\nPlease try again later."
+                PizzaLoadFailure.Unknown -> "Failed to load pizzas.\nPlease try again."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Try again",
+            style = MaterialTheme.typography.bodyMedium,
+            color = ColorAccent,
+            modifier = Modifier.clickable(onClick = onRetry),
+        )
     }
 }
 
@@ -216,6 +295,7 @@ private fun PizzaCarousel(
         val carouselHeight = CAROUSEL_HEIGHT * widthScale
         val scope = rememberCoroutineScope()
         val context = LocalPlatformContext.current
+        val density = LocalDensity.current
         val backgroundEnter = remember { Animatable(0f) }
         val contentEnter = remember { Animatable(0f) }
 
@@ -250,20 +330,81 @@ private fun PizzaCarousel(
         }
         val pagerState = rememberPagerState(initialPage = initialIndex) { state.pizzas.size }
         val currentPizza = state.pizzas.getOrNull(pagerState.currentPage)
-        val zoomSpec = tween<Float>(
-            durationMillis = ZOOM_ANIMATION_DURATION_MS,
-            easing = FastOutSlowInEasing,
-        )
         val panSpec = tween<Float>(
             durationMillis = ZOOM_ANIMATION_DURATION_MS,
             easing = FastOutSlowInEasing,
         )
+        val zoomInSpec = keyframes {
+            durationMillis = ZOOM_ANIMATION_DURATION_MS
+            MAX_ZOOM * ZOOM_IN_OVERSHOOT at (ZOOM_ANIMATION_DURATION_MS * 0.82f).toInt() using FastOutSlowInEasing
+            MAX_ZOOM at ZOOM_ANIMATION_DURATION_MS
+        }
+        val zoomOutSpec = keyframes {
+            durationMillis = ZOOM_ANIMATION_DURATION_MS
+            ZOOM_OUT_UNDERSHOOT at (ZOOM_ANIMATION_DURATION_MS * 0.82f).toInt() using FastOutSlowInEasing
+            1f at ZOOM_ANIMATION_DURATION_MS
+        }
 
         val zoom = remember { Animatable(1f) }
         val zoomPanX = remember { Animatable(0f) }
         val zoomPanY = remember { Animatable(0f) }
+        val sizeBounceScale = remember { Animatable(1f) }
+        val pageSettlePullX = remember { Animatable(0f) }
+        val infoPanelBounceY = remember { Animatable(0f) }
         var zoomMode by remember { mutableStateOf(false) }
         var zoomClosing by remember { mutableStateOf(false) }
+        var previousSelectedSize by remember { mutableStateOf(state.selectedSize) }
+        val sizeChangeAnimation = remember(state.selectedSize) {
+            sizeChangeAnimation(from = previousSelectedSize, to = state.selectedSize)
+        }
+        var lastHandledSettlePull by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+        SideEffect {
+            previousSelectedSize = state.selectedSize
+        }
+
+        LaunchedEffect(state.selectedSize, sizeChangeAnimation) {
+            if (sizeChangeAnimation == SizeChangeAnimation.Bounce) {
+                sizeBounceScale.snapTo(1f)
+                sizeBounceScale.animateTo(
+                    targetValue = 1f,
+                    animationSpec = keyframes {
+                        durationMillis = SIZE_BOUNCE_DURATION_MS
+                        1.055f at 70 using FastOutSlowInEasing
+                        0.992f at 150 using FastOutSlowInEasing
+                        1f at SIZE_BOUNCE_DURATION_MS
+                    },
+                )
+            }
+        }
+
+        suspend fun runPageSettlePull(fromPage: Int, toPage: Int) {
+            val transition = fromPage to toPage
+            if (fromPage == toPage || lastHandledSettlePull == transition) return
+            lastHandledSettlePull = transition
+            val direction = if (toPage > fromPage) -1f else 1f
+            pageSettlePullX.snapTo(0f)
+            pageSettlePullX.animateTo(
+                targetValue = 0f,
+                animationSpec = keyframes {
+                    durationMillis = PAGE_SETTLE_PULL_DURATION_MS
+                    with(density) { PAGE_SETTLE_PULL_DISTANCE.toPx() } * direction at 117 using FastOutSlowInEasing
+                    0f at PAGE_SETTLE_PULL_DURATION_MS
+                },
+            )
+        }
+
+        LaunchedEffect(pagerState) {
+            var settledPage = pagerState.currentPage
+            snapshotFlow { pagerState.isScrollInProgress to pagerState.currentPage }
+                .collect { (isScrollInProgress, page) ->
+                    if (!isScrollInProgress && page != settledPage) {
+                        runPageSettlePull(fromPage = settledPage, toPage = page)
+                        settledPage = page
+                    }
+                }
+        }
+
         // Reset the zoom whenever the centered pizza changes.
         LaunchedEffect(pagerState.currentPage) {
             if (zoom.value != 1f) zoom.snapTo(1f)
@@ -277,11 +418,21 @@ private fun PizzaCarousel(
             if (zoomClosing) return
             zoomClosing = true
             coroutineScope {
-                launch { zoom.animateTo(1f, zoomSpec) }
+                launch { zoom.animateTo(1f, zoomOutSpec) }
                 launch { zoomPanX.animateTo(0f, panSpec) }
                 launch { zoomPanY.animateTo(0f, panSpec) }
             }
             zoomMode = false
+            infoPanelBounceY.snapTo(0f)
+            infoPanelBounceY.animateTo(
+                targetValue = 0f,
+                animationSpec = keyframes {
+                    durationMillis = INFO_PANEL_BOUNCE_DURATION_MS
+                    -with(density) { INFO_PANEL_BOUNCE_DISTANCE.toPx() } at 70 using FastOutSlowInEasing
+                    with(density) { INFO_PANEL_BOUNCE_DISTANCE.toPx() } * 0.2f at 155 using FastOutSlowInEasing
+                    0f at INFO_PANEL_BOUNCE_DURATION_MS
+                },
+            )
             zoomClosing = false
         }
 
@@ -296,7 +447,7 @@ private fun PizzaCarousel(
             scope.launch {
                 zoomPanX.snapTo(0f)
                 zoomPanY.snapTo(0f)
-                zoom.animateTo(MAX_ZOOM, zoomSpec)
+                zoom.animateTo(MAX_ZOOM, zoomInSpec)
             }
         }
 
@@ -305,74 +456,39 @@ private fun PizzaCarousel(
         }
 
         // Peach background: solid top with a curved bottom edge.
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val progress = backgroundEnter.value
-            val measuredCurveAnchors = sizeSelectorCurveAnchors?.takeUnless { isLandscape }
-            val fallbackEdge = BG_SEAM_EDGE * h
-            val fallbackControl = (2f * BG_SEAM_CENTER - BG_SEAM_EDGE) * h
-            val targetControlX = measuredCurveAnchors
-                ?.middleCenterX
-                ?.minus(carouselRootLeft)
-                ?.let { middleX -> 2f * middleX - w / 2f }
-                ?: w / 2f
-            val targetCenter = measuredCurveAnchors?.middleCenterY?.minus(carouselRootTop)
-            val targetSide = measuredCurveAnchors?.sideCenterY?.minus(carouselRootTop)?.minus(BG_CURVE_SIDE_VISUAL_LIFT.toPx())
-            val sideX = measuredCurveAnchors?.sideCenterX?.minus(carouselRootLeft)
-            val sideT = if (sideX != null) {
-                var low = 0f
-                var high = 0.5f
-                repeat(12) {
-                    val mid = (low + high) / 2f
-                    val xAtMid = 2f * (1f - mid) * mid * targetControlX + mid * mid * w
-                    if (xAtMid < sideX) {
-                        low = mid
-                    } else {
-                        high = mid
-                    }
-                }
-                (low + high) / 2f
-            } else {
-                null
-            }
-            val sideWeight = sideT?.let { 2f * it * (1f - it) }
-            val denominator = sideWeight?.let { 0.5f - it }
-            val controlDelta = if (
-                targetCenter != null &&
-                targetSide != null &&
-                denominator != null &&
-                denominator > 0.001f
-            ) {
-                (targetCenter - targetSide) / denominator
-            } else {
-                null
-            }
-            val targetEdge = if (targetCenter != null && controlDelta != null) {
-                targetCenter - controlDelta / 2f
-            } else {
-                fallbackEdge
-            }
-            val targetControl = if (targetCenter != null && controlDelta != null) {
-                targetCenter + controlDelta / 2f
-            } else {
-                fallbackControl
-            }
-            val yEdge = lerp(h, targetEdge, progress)
-            val yControl = lerp(h, targetControl, progress)
-            val controlX = lerp(w / 2f, targetControlX, progress)
-            val path = Path().apply {
-                moveTo(0f, 0f)
-                lineTo(w, 0f)
-                lineTo(w, yEdge)
-                quadraticTo(controlX, yControl, 0f, yEdge)
-                close()
-            }
-            drawPath(path = path, color = ColorHighlight)
-        }
+        CatalogBackground(
+            progress = backgroundEnter.value,
+            isLandscape = isLandscape,
+            sizeSelectorCurveAnchors = sizeSelectorCurveAnchors,
+            carouselRootLeft = carouselRootLeft,
+            carouselRootTop = carouselRootTop,
+            modifier = Modifier.fillMaxSize(),
+        )
 
         @Composable
         fun CarouselStage(modifier: Modifier = Modifier) {
+            val slotWidthPx = with(density) { slotWidth.toPx() }
+            val targetCenterSize = state.selectedSize.pizzaImageSize() * widthScale
+            val centerSize by animateDpAsState(
+                targetValue = targetCenterSize,
+                animationSpec = tween(
+                    durationMillis = if (
+                        sizeChangeAnimation == SizeChangeAnimation.SmoothShrink
+                    ) {
+                        SIZE_L_TO_M_SHRINK_DURATION_MS
+                    } else {
+                        0
+                    },
+                    easing = FastOutSlowInEasing,
+                ),
+                label = "pizzaCenterSize",
+            )
+            val pageSettlePullPageOffset = if (slotWidthPx > 0f) {
+                -pageSettlePullX.value / slotWidthPx
+            } else {
+                0f
+            }
+
             Box(
                 modifier = modifier
                     .zIndex(if (zoomMode) 3f else 1f)
@@ -382,16 +498,27 @@ private fun PizzaCarousel(
                     pageSize = PageSize.Fixed(slotWidth),
                     contentPadding = PaddingValues(horizontal = sidePadding),
                     userScrollEnabled = !zoomMode,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = pageSettlePullX.value
+                        },
                 ) { page ->
                     val pizza = state.pizzas[page]
-                    val centerSize = state.selectedSize.pizzaImageSize() * widthScale
-                    val sideScale = SIDE_PIZZA_SIZE.value / state.selectedSize.pizzaImageSize().value
                     val pageOffset =
-                        ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction)
+                        (
+                            (pagerState.currentPage - page) +
+                                pagerState.currentPageOffsetFraction +
+                                pageSettlePullPageOffset
+                            )
                             .absoluteValue.coerceIn(0f, 1f)
-                    val imageScale = lerp(1f, sideScale, pageOffset)
                     val isCenter = page == pagerState.currentPage
+                    val baseImageSize = if (isCenter) centerSize else targetCenterSize
+                    val imageScale = if (isCenter) {
+                        lerp(1f, (SIDE_PIZZA_SIZE * widthScale).value / centerSize.value, pageOffset)
+                    } else {
+                        lerp(1f, (SIDE_PIZZA_SIZE * widthScale).value / targetCenterSize.value, pageOffset)
+                    }
 
                     Box(
                         modifier = Modifier
@@ -407,11 +534,12 @@ private fun PizzaCarousel(
                                 modifier = Modifier
                                     // requiredSize keeps the image square regardless of the
                                     // narrower page width, so the circle clip stays a circle.
-                                    .requiredSize(centerSize)
+                                    .requiredSize(baseImageSize)
                                     .graphicsLayer {
                                         alpha = contentEnter.value
-                                        scaleX = imageScale
-                                        scaleY = imageScale
+                                        val bounceScale = if (isCenter) sizeBounceScale.value else 1f
+                                        scaleX = imageScale * bounceScale
+                                        scaleY = imageScale * bounceScale
                                     }
                                     .shadow(elevation = 4.dp, shape = CircleShape)
                                     .clip(CircleShape)
@@ -419,7 +547,33 @@ private fun PizzaCarousel(
                                         if (isCenter && pageOffset < 0.5f) {
                                             startZoom()
                                         } else {
-                                            scope.launch { pagerState.animateScrollToPage(page) }
+                                            scope.launch {
+                                                val fromPage = pagerState.currentPage
+                                                var pullStarted = false
+                                                val scrollJob = launch {
+                                                    pagerState.animateScrollToPage(page)
+                                                }
+                                                val pullJob = launch {
+                                                    snapshotFlow {
+                                                        pagerState.currentPage == page &&
+                                                            pagerState.currentPageOffsetFraction.absoluteValue <=
+                                                            PAGE_SETTLE_PULL_CLICK_OFFSET_THRESHOLD
+                                                    }.first { nearTarget -> nearTarget }
+                                                    if (scrollJob.isActive) {
+                                                        pullStarted = true
+                                                        runPageSettlePull(fromPage = fromPage, toPage = page)
+                                                    }
+                                                }
+
+                                                scrollJob.join()
+                                                if (!pullStarted) {
+                                                    pullJob.cancel()
+                                                    runPageSettlePull(
+                                                        fromPage = fromPage,
+                                                        toPage = pagerState.currentPage,
+                                                    )
+                                                }
+                                            }
                                         }
                                     },
                             )
@@ -437,7 +591,6 @@ private fun PizzaCarousel(
                 }
 
                 if (zoomMode && currentPizza != null) {
-                    val centerSize = state.selectedSize.pizzaImageSize() * widthScale
                     AsyncImage(
                         model = pizzaImageRequest(context, currentPizza.imageUrl, full = true),
                         contentDescription = currentPizza.name,
@@ -466,13 +619,11 @@ private fun PizzaCarousel(
                             .pointerInput(Unit) {
                                 detectTransformGestures { _, pan, zoomChange, _ ->
                                     scope.launch {
-                                        zoomPanX.snapTo(zoomPanX.value + pan.x * ZOOM_PAN_MULTIPLIER)
-                                        zoomPanY.snapTo(zoomPanY.value + pan.y * ZOOM_PAN_MULTIPLIER)
-                                        val nextZoom = (zoom.value * zoomChange).coerceIn(1f, MAX_ZOOM * 1.5f)
-                                        if (nextZoom <= PINCH_ZOOM_OUT_THRESHOLD) {
+                                        if ((zoomChange - 1f).absoluteValue > PINCH_ZOOM_GESTURE_THRESHOLD) {
                                             closeZoom()
                                         } else {
-                                            zoom.snapTo(nextZoom)
+                                            zoomPanX.snapTo(zoomPanX.value + pan.x * ZOOM_PAN_MULTIPLIER)
+                                            zoomPanY.snapTo(zoomPanY.value + pan.y * ZOOM_PAN_MULTIPLIER)
                                         }
                                     }
                                 }
@@ -516,7 +667,7 @@ private fun PizzaCarousel(
                             .padding(top = 16.dp)
                             .graphicsLayer {
                                 val progress = ((zoom.value - 1f) / (MAX_ZOOM - 1f)).coerceIn(0f, 1f)
-                                translationY = INFO_PANEL_ZOOM_EXIT.toPx() * progress
+                                translationY = INFO_PANEL_ZOOM_EXIT.toPx() * progress + infoPanelBounceY.value
                             },
                         enterProgress = contentEnter.value,
                     )
@@ -551,13 +702,88 @@ private fun PizzaCarousel(
                         },
                         modifier = Modifier.graphicsLayer {
                             val progress = ((zoom.value - 1f) / (MAX_ZOOM - 1f)).coerceIn(0f, 1f)
-                            translationY = INFO_PANEL_ZOOM_EXIT.toPx() * progress
+                            translationY = INFO_PANEL_ZOOM_EXIT.toPx() * progress + infoPanelBounceY.value
                         },
                         enterProgress = contentEnter.value,
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CatalogBackground(
+    progress: Float,
+    isLandscape: Boolean,
+    sizeSelectorCurveAnchors: SizeSelectorCurveAnchors?,
+    carouselRootLeft: Float,
+    carouselRootTop: Float,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val measuredCurveAnchors = sizeSelectorCurveAnchors?.takeUnless { isLandscape }
+        val fallbackEdge = BG_SEAM_EDGE * h
+        val fallbackControl = (2f * BG_SEAM_CENTER - BG_SEAM_EDGE) * h
+        val targetControlX = measuredCurveAnchors
+            ?.middleCenterX
+            ?.minus(carouselRootLeft)
+            ?.let { middleX -> 2f * middleX - w / 2f }
+            ?: w / 2f
+        val targetCenter = measuredCurveAnchors?.middleCenterY?.minus(carouselRootTop)
+        val targetSide = measuredCurveAnchors?.sideCenterY?.minus(carouselRootTop)?.minus(BG_CURVE_SIDE_VISUAL_LIFT.toPx())
+        val sideX = measuredCurveAnchors?.sideCenterX?.minus(carouselRootLeft)
+        val sideT = if (sideX != null) {
+            var low = 0f
+            var high = 0.5f
+            repeat(12) {
+                val mid = (low + high) / 2f
+                val xAtMid = 2f * (1f - mid) * mid * targetControlX + mid * mid * w
+                if (xAtMid < sideX) {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            (low + high) / 2f
+        } else {
+            null
+        }
+        val sideWeight = sideT?.let { 2f * it * (1f - it) }
+        val denominator = sideWeight?.let { 0.5f - it }
+        val controlDelta = if (
+            targetCenter != null &&
+            targetSide != null &&
+            denominator != null &&
+            denominator > 0.001f
+        ) {
+            (targetCenter - targetSide) / denominator
+        } else {
+            null
+        }
+        val targetEdge = if (targetCenter != null && controlDelta != null) {
+            targetCenter - controlDelta / 2f
+        } else {
+            fallbackEdge
+        }
+        val targetControl = if (targetCenter != null && controlDelta != null) {
+            targetCenter + controlDelta / 2f
+        } else {
+            fallbackControl
+        }
+        val yEdge = lerp(h, targetEdge, progress)
+        val yControl = lerp(h, targetControl, progress)
+        val controlX = lerp(w / 2f, targetControlX, progress)
+        val path = Path().apply {
+            moveTo(0f, 0f)
+            lineTo(w, 0f)
+            lineTo(w, yEdge)
+            quadraticTo(controlX, yControl, 0f, yEdge)
+            close()
+        }
+        drawPath(path = path, color = ColorHighlight)
     }
 }
 

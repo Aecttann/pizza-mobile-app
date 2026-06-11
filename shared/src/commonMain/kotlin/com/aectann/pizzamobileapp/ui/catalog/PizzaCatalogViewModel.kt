@@ -7,6 +7,9 @@ import com.aectann.pizzamobileapp.data.model.PizzaSize
 import com.aectann.pizzamobileapp.data.model.variantFor
 import com.aectann.pizzamobileapp.data.repository.PizzaRepository
 import com.aectann.pizzamobileapp.data.repository.PizzaRepositoryImpl
+import com.aectann.pizzamobileapp.data.repository.PizzaLoadFailure
+import com.aectann.pizzamobileapp.data.repository.toPizzaLoadFailure
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +22,7 @@ data class PizzaCatalogUiState(
     val selectedSize: PizzaSize = PizzaSize.M,
     val quantities: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = true,
-    val error: String? = null,
+    val error: PizzaLoadFailure? = null,
 )
 
 private fun List<Pizza>.toLoadedCatalogState(): PizzaCatalogUiState =
@@ -40,6 +43,7 @@ fun PizzaCatalogUiState.totalPriceFor(pizzaId: String): Double {
 
 class PizzaCatalogViewModel(
     initialPizzas: List<Pizza>? = null,
+    initialLoad: Deferred<Result<List<Pizza>>>? = null,
     private val repository: PizzaRepository = PizzaRepositoryImpl(),
 ) : ViewModel() {
 
@@ -47,22 +51,46 @@ class PizzaCatalogViewModel(
     val uiState: StateFlow<PizzaCatalogUiState> = _uiState.asStateFlow()
 
     init {
-        if (initialPizzas == null) {
+        when {
+            initialPizzas != null -> Unit
+            initialLoad != null -> observeInitialLoad(initialLoad)
+            else -> loadPizzas()
+        }
+    }
+
+    private fun observeInitialLoad(initialLoad: Deferred<Result<List<Pizza>>>) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            applyLoadResult(initialLoad.await())
+        }
+    }
+
+    fun retry() {
+        if (!_uiState.value.isLoading) {
             loadPizzas()
         }
     }
 
     private fun loadPizzas() {
         viewModelScope.launch {
-            try {
-                val pizzas = repository.getPizzas()
-                _uiState.update {
-                    pizzas.toLoadedCatalogState()
-                }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = e.message) }
-            }
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            applyLoadResult(runCatching { repository.getPizzas() })
         }
+    }
+
+    private fun applyLoadResult(result: Result<List<Pizza>>) {
+        result
+            .onSuccess { pizzas ->
+                _uiState.update { pizzas.toLoadedCatalogState() }
+            }
+            .onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = error.toPizzaLoadFailure(),
+                    )
+                }
+            }
     }
 
     fun selectSize(size: PizzaSize) {
