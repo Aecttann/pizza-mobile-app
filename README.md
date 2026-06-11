@@ -1,5 +1,13 @@
 This is a Kotlin Multiplatform project targeting Android, iOS.
 
+## Demo
+
+<a href="assets/demo.mp4">
+  <img src="assets/demo.webp" alt="Pizza Mobile App demo" width="320">
+</a>
+
+[Open full-quality MP4](assets/demo.mp4)
+
 * [/iosApp](./iosApp/iosApp) contains an iOS application. Even if you’re sharing your UI with Compose Multiplatform,
   you need this entry point for your iOS app. This is also where you should add SwiftUI code for your project.
 
